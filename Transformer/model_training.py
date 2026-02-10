@@ -111,3 +111,11 @@ def train(model, optimizer, scheduler, train_loader, val_loader,
                                 path=f"checkpoints/transformer_model_epoch_{epoch}.pt")
             tqdm.write(f"model saved with Val Loss: {best_model_val_loss:.4f}")
             
+
+if __name__ == "__main__":
+    os.makedirs("checkpoints", exist_ok=True)
+    train(model, optimizer, scheduler, train_loader, val_loader, 
+          max_iter=config.max_iter, eval_iter=config.eval_iter, 
+          eval_interval=config.eval_interval, 
+          train_logging_interval=config.train_logging_interval,
+          start_epoch=0, device=config.device)

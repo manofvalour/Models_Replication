@@ -7,10 +7,11 @@ class TransformerConfig():
     batch_size:int = 2048      # number of independent sequence to process in parallel
     max_iter:int = 1      #100k #total number of epoches
     block_size: int = 512     #the maximum context length of the prediction
-    eval_interval: int =50
-    eval_iter:int = 2         #epoches before evaluation
-    n_embd: int= 512     #512     # Dimensions dmodel
-    n_head:int = 8     #8       # number of head in the multihead attention mechanism sub-head of the Transformer layer
+    train_logging_interval: int = 500
+    eval_interval: int =1000
+    eval_iter:int = 100         
+    n_embd: int= 512     #512     # Dimensions of the model (dmodel)
+    n_head:int = 8     #8       # number of head in the multihead attention mechanism 
     n_layer:int= 6
     dropout: float= 0.1
     head_size: int = n_embd//n_head    #dimension of key and value dk==dv == dmodel/n_head
