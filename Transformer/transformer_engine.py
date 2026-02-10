@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .model_architecture import Block
+from model_architecture import Block
 
 
 ##creating out model with torch
@@ -13,7 +13,8 @@ class TransformerLanguageModel(nn.Module):
         # The input embedding layer
         self.config=config
         self.tokenizer=tokenizer
-        self.tok_embedding_table = nn.Embedding(config.vocab_size, config.n_embd) ## embedding 
+        vocab_size = tokenizer.vocab_size
+        self.tok_embedding_table = nn.Embedding(vocab_size, config.n_embd) ## embedding 
         self.input_position_table = nn.Embedding(config.block_size, config.n_embd) ##input positional encoding
 
         # The output embedding layer
@@ -24,7 +25,7 @@ class TransformerLanguageModel(nn.Module):
         self.decoder_blocks = nn.ModuleList([Block(config, is_decoder=True) for _ in range(config.n_layer)])
 
         # The Linear model
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
+        self.lm_head = nn.Linear(config.n_embd, vocab_size)
         self.lm_head.weight = self.tok_embedding_table.weight     #tying the weight
 
     def forward(self, idx_input, idx_output, target=None):

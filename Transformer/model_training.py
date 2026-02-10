@@ -100,7 +100,7 @@ def train(model, optimizer, scheduler, train_loader, val_loader,
                 tqdm.write(f"Step {batch_idx} | Val Loss: {val_loss.item():.4f} | val_ppl: {val_perp:.2f}")
 
           # Get the final validation loss for this epoch (will be the last computed by estimate_loss)
-        final_epoch_val_loss_scalar = val_loss.item()
+        final_epoch_val_loss_scalar = val_loss
         best_model_val_loss = float('inf') # Initialize best validation loss for this epoch
 
         if final_epoch_val_loss_scalar < best_model_val_loss:
