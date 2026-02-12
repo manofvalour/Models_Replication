@@ -4,7 +4,7 @@ import torch
 ## assigning the parameters to variables
 @dataclass
 class TransformerConfig():
-    batch_size:int = 2048      # number of independent sequence to process in parallel
+    batch_size:int = 8      # number of independent sequence to process in parallel
     max_iter:int = 1      #100k #total number of epoches
     block_size: int = 512     #the maximum context length of the prediction
     train_logging_interval: int = 500
@@ -19,3 +19,6 @@ class TransformerConfig():
     eps: float = 1e-9
     warmup_steps: int = 4000
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
+    ckpt_dir:str = 
+    max_grad_norm: float = 1.0
+    max_tokens_per_batch:int = batch_size * block_size

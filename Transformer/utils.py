@@ -5,16 +5,12 @@ import sacrebleu
 import random
 import numpy as np
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 
 
 def clean_wmt_row(row, tokenizer, block_size=32)-> dict[dict[str, list[int] | int | bool]]:
     
-    """Helper function to clean and tokenize a single row of the WMT dataset.
-              
-        :param row: A single row from the WMT dataset.
-        :param tokenizer: The tokenizer to use for encoding the text.
-        :param block_size: The maximum allowed length for source and target sequences. Rows exceeding this will be marked as 'keep': False.
-        """
+    """Helper function to clean and tokenize a single row of the WMT dataset."""
     try:
         src_text = row['prompt'][0]['content'].replace('Translate this into French:', '').strip()
         tgt_text = row['completion'][0]['content'].strip()
@@ -94,15 +90,8 @@ def collate_fn(batch):
 ## Evaluating BLEU Score
 def calculate_bleu(model, dataloader, tokenizer, device, max_new_tokens=128):
     """
-    Helper function to calculate the BLEU score on a subset of the validation set.
+    Helper function to calculate the BLEU score on a subset of the validation set."""
     
-    :param model: The trained Transformer model to evaluate.
-    :param dataloader: dataloader for the validation set, yielding batches of (src, tgt) pairs.
-    :param tokenizer: the tokenizer used to decode the generated token IDs back into text.
-    :param device: device (CPU or GPU) to run the evaluation on.
-    :param max_new_tokens: number of batches to evaluate (to keep it fast). Each batch can have multiple sentences, so this is not the same as max_new_tokens in generation.
-    :return: BLEU score as a float.
-    """
     model.eval()
     all_preds = []
     all_targets = []
@@ -128,12 +117,6 @@ def calculate_bleu(model, dataloader, tokenizer, device, max_new_tokens=128):
 def estimate_loss(model, dataloader, eval_iters=20, device='cpu'):
     """ Helper to get a stable loss estimate without running the whole dataset 
      on the validation set.
-
-     :param model: The Transformer model to evaluate.
-     :param dataloader: DataLoader for the validation set, yielding batches of (src, tgt) pairs.
-     :param eval_iters: Number of batches to evaluate for a stable loss estimate.
-     :param device: Device (CPU or GPU) to run the evaluation on.
-     :return: Average loss over the evaluated batches.
      """
     
     model.eval()
@@ -162,11 +145,6 @@ def estimate_loss(model, dataloader, eval_iters=20, device='cpu'):
 def get_transformer_schedule(optimizer, d_model, warmup_steps=4000):
     """
     Returns a learning rate scheduler based on the 'Attention is All You Need' formula.
-
-        :param optimizer: The optimizer for which to schedule the learning rate.
-        :param d_model: The dimensionality of the model.
-        :param warmup_steps: The number of steps to linearly increase the learning rate before decaying.
-        :return: A LambdaLR scheduler that can be used with the optimizer.
     """
 
     def lr_lambda(step):
@@ -232,12 +210,16 @@ def data_prep(dataset, tokenizer, block_size=128, max_tokens_per_batch=2048, num
     filtered_vlds = val_data.filter(lambda x: x['keep'])
 
     # Batching the Dataset
-    tr_sampler = WMTBatchSampler(filtered_tds, max_tokens_per_batch=max_tokens_per_batch)
+    #tr_sampler = WMTBatchSampler(filtered_tds, max_tokens_per_batch=max_tokens_per_batch)
     val_sampler = WMTBatchSampler(filtered_vlds, max_tokens_per_batch=max_tokens_per_batch)
 
+    ## distributed sampler
+    tr_dist_sampler = DistributedSampler(filtered_tds, shuffle=True)
+    #val_dist_sampler = DistributedSampler(filtered_vlds, shuffle=False)
     #Load to DataLoader
-    train_loader = DataLoader(filtered_tds, batch_sampler=tr_sampler, 
-                              collate_fn=collate_fn, num_workers=num_workers)
+    train_loader = DataLoader(filtered_tds, batch_size = max_tokens_per_batch,
+                              sampler=tr_dist_sampler, collate_fn=collate_fn, 
+                              num_workers=num_workers)
     
     val_loader = DataLoader(filtered_vlds, batch_sampler=val_sampler, 
                             collate_fn=collate_fn, num_workers=num_workers//2)
