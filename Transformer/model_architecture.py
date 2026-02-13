@@ -32,18 +32,17 @@ class SelfAttentionHead(nn.Module):
         k = self.key(kv_input)
         v = self.value(kv_input)
 
-        wei = q @ k.transpose(-2,-1) * dk**-0.5       #(B,T,head_size) @ (B,head_size,T) --> (B,T,T)
-        wei_norm = F.softmax(wei,dim=-1)
-        wei_norm = self.dropout(wei_norm)
+        #wei = q @ k.transpose(-2,-1) * dk**-0.5       #(B,T,head_size) @ (B,head_size,T) --> (B,T,T)
+        #wei_norm = F.softmax(wei,dim=-1)
+        #wei_norm = self.dropout(wei_norm)
 
         ## perform the weighted aggregation of the value
-        out = wei_norm @ v
-        
-        #out = F.scaled_dot_product_attention(q,k,v, dropout_p=self.config.dropout, is_causal = False) #flash attention
-      
+        #out = wei_norm @ v
+
+        out = F.scaled_dot_product_attention(q,k,v, dropout_p=self.config.dropout, is_causal = False) #flash attention
 
         return out
-    
+
 
 # implementing Self-Attention head with masking for the decoder part of the transformer
 class MaskedSelfAttentionHead(nn.Module):
@@ -66,19 +65,19 @@ class MaskedSelfAttentionHead(nn.Module):
         q = self.query(x)     #query from the decoder input
         v = self.value(x)     #B,T,16    #value from the encoder output
 
-        wei = q @ k.transpose(-2,-1) * dk**-0.5                      #(B,T,head_size) @ (B,head_size,T) --> (B,T,T)
+        #wei = q @ k.transpose(-2,-1) * dk**-0.5                      #(B,T,head_size) @ (B,head_size,T) --> (B,T,T)
 
-        wei_masked = wei.masked_fill(self.tril[:T,:T]==0, float('-inf'))
-        wei_norm = F.softmax(wei_masked, dim=-1)                           #normalized
+        #wei_masked = wei.masked_fill(self.tril[:T,:T]==0, float('-inf'))
+        #wei_norm = F.softmax(wei_masked, dim=-1)                           #normalized
 
-        #out = F.scaled_dot_product_attention(q,k,v, dropout_p=self.config.dropout, is_causal = True) #flash attention
-        wei_norm = self.dropout(wei_norm)
+        out = F.scaled_dot_product_attention(q,k,v, dropout_p=self.config.dropout, is_causal = True) #flash attention
+        #wei_norm = self.dropout(wei_norm)
 
         ## perform the weighted aggregation of the value
-        out = wei_norm @ v
+        #out = wei_norm @ v
 
         return out
-    
+
 
 
 ## multihead attention
@@ -114,7 +113,7 @@ class MultiHeadAttention(nn.Module):
             out = self.dropout(self.proj(out))
 
         return out
-    
+
 
 ## feed forward network
 class FeedForward(nn.Module):
@@ -131,7 +130,7 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         return self.net(x)
-    
+
 
 ## transformer block
 class Block(nn.Module):

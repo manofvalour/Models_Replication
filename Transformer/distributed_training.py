@@ -41,7 +41,7 @@ class Trainer:
     def prep_data(self, num_workers=4 ):
         ## cleaning, and preparing and loading the dataset usin data laoder
         train_loader, val_loader = data_prep(self.dataset, self.tokenizer, 
-                                             block_size=self.config.blocksize, 
+                                             block_size=self.config.block_size, 
                                      max_tokens_per_batch=self.config.max_tokens_per_batch,
                                      num_workers=num_workers)
         
@@ -117,7 +117,7 @@ class Trainer:
                                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}",
                                 'tps': f"{all_gpu_toks_per_sec:.0f}"
                             })
-                            running_loss = 0.0 # Reset after logging
+                        running_loss = 0.0 # Reset after logging
 
                     # Validation Logic (Less frequent to save time)
                     if self.local_rank == 0 and batch_idx > 0 and batch_idx % self.config.eval_interval == 0:
@@ -153,7 +153,6 @@ def main():
     rank = int(os.environ.get['RANK', -1])
 
     ddp_setup(local_rank=local_rank)
-    ## setting up ddp function
 
     torch.manual_seed(1337)
 

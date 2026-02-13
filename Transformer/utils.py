@@ -9,7 +9,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 
 def clean_wmt_row(row, tokenizer, block_size=32)-> dict[dict[str, list[int] | int | bool]]:
-    
+
     """Helper function to clean and tokenize a single row of the WMT dataset."""
     try:
         src_text = row['prompt'][0]['content'].replace('Translate this into French:', '').strip()
@@ -26,11 +26,11 @@ def clean_wmt_row(row, tokenizer, block_size=32)-> dict[dict[str, list[int] | in
             'tgt_len': len(tgt_ids),
             'keep': len(src_ids) <= block_size and len(tgt_ids) <= block_size
         }
-    
+
     except Exception as e:
         # Mark as keep=False so we can filter out corrupted rows
         return {'src_ids': [], 'tgt_ids': [], 'src_len': 0, 'tgt_len': 0, 'keep': False}
-    
+
 
 class WMTBatchSampler:
     def __init__(self, dataset, max_tokens_per_batch=128, shuffle=True):
@@ -61,7 +61,7 @@ class WMTBatchSampler:
                 batches.append(current_batch)
                 current_batch = [idx]
                 max_len = item_len
-                
+
         if current_batch:
             batches.append(current_batch)
         return batches
@@ -74,7 +74,7 @@ class WMTBatchSampler:
 
     def __len__(self):
         return len(self._batches)
-    
+
 
 def collate_fn(batch):
     # batch is now a list of dictionaries from the Dataset
@@ -85,13 +85,13 @@ def collate_fn(batch):
     tgt_padded = torch.nn.utils.rnn.pad_sequence(tgt, batch_first=True, padding_value=0)
 
     return src_padded, tgt_padded
-    
+
 
 ## Evaluating BLEU Score
 def calculate_bleu(model, dataloader, tokenizer, device, max_new_tokens=128):
     """
     Helper function to calculate the BLEU score on a subset of the validation set."""
-    
+
     model.eval()
     all_preds = []
     all_targets = []
@@ -102,7 +102,7 @@ def calculate_bleu(model, dataloader, tokenizer, device, max_new_tokens=128):
             if i > max_new_tokens: break
 
             src = src.to(device)
-            
+
             # model.generate now returns decoded strings, not token IDs
             decoded_preds = model.generate(src, max_new_tokens=max_new_tokens)
             decoded_tgts = tokenizer.batch_decode(tgt, skip_special_tokens=True)
@@ -115,10 +115,10 @@ def calculate_bleu(model, dataloader, tokenizer, device, max_new_tokens=128):
 
 
 def estimate_loss(model, dataloader, eval_iters=20, device='cpu'):
-    """ Helper to get a stable loss estimate without running the whole dataset 
+    """ Helper to get a stable loss estimate without running the whole dataset
      on the validation set.
      """
-    
+
     model.eval()
     losses = torch.zeros(eval_iters)
 
@@ -150,22 +150,22 @@ def get_transformer_schedule(optimizer, d_model, warmup_steps=4000):
     def lr_lambda(step):
         # step + 1 to avoid division by zero at step 0
         step = step + 1
-        
+
         term1 = step ** -0.5
         term2 = step * (warmup_steps ** -1.5)
-        
+
         # Scale by d_model^-0.5
         return (d_model ** -0.5) * min(term1, term2)
 
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
 
-def save_checkpoint(model, optimizer, 
-                    scheduler, train_loss, 
+def save_checkpoint(model, optimizer,
+                    scheduler, train_loss,
                     val_loss,epoch, path):
     """Saves the model and optimizer state to a checkpoint file."""
-    
-    
+
+
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
@@ -184,16 +184,16 @@ def load_checkpoint(model, optimizer, scheduler, path, device):
     """Loads the model and optimizer state from a checkpoint file."""
 
     checkpoint = torch.load(path, map_location=device)
-    
+
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     scheduler.load_state_dict(checkpoint['scheduler'])
     torch.set_rng_state(checkpoint['rng_state'])
-    
+
     print(f"Checkpoint loaded from {path} at epoch {checkpoint['epoch']}")
-    
-    return (model, optimizer, scheduler, 
-            checkpoint['epoch'], checkpoint['train_loss'], 
+
+    return (model, optimizer, scheduler,
+            checkpoint['epoch'], checkpoint['train_loss'],
             checkpoint['val_loss'])
 
 
@@ -210,18 +210,18 @@ def data_prep(dataset, tokenizer, block_size=128, max_tokens_per_batch=2048, num
     filtered_vlds = val_data.filter(lambda x: x['keep'])
 
     # Batching the Dataset
-    #tr_sampler = WMTBatchSampler(filtered_tds, max_tokens_per_batch=max_tokens_per_batch)
+    tr_sampler = WMTBatchSampler(filtered_tds, max_tokens_per_batch=max_tokens_per_batch)
     val_sampler = WMTBatchSampler(filtered_vlds, max_tokens_per_batch=max_tokens_per_batch)
 
     ## distributed sampler
-    tr_dist_sampler = DistributedSampler(filtered_tds, shuffle=True)
+    #tr_dist_sampler = DistributedSampler(filtered_tds, shuffle=True)
     #val_dist_sampler = DistributedSampler(filtered_vlds, shuffle=False)
     #Load to DataLoader
-    train_loader = DataLoader(filtered_tds, batch_size = max_tokens_per_batch,
-                              sampler=tr_dist_sampler, collate_fn=collate_fn, 
+    train_loader = DataLoader(filtered_tds, #batch_size = max_tokens_per_batch,
+                              batch_sampler=tr_sampler, collate_fn=collate_fn,
                               num_workers=num_workers)
-    
-    val_loader = DataLoader(filtered_vlds, batch_sampler=val_sampler, 
+
+    val_loader = DataLoader(filtered_vlds, batch_sampler=val_sampler,
                             collate_fn=collate_fn, num_workers=num_workers//2)
 
     return train_loader, val_loader

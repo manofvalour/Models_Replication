@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model_architecture import Block
+from model_arch import Block
 
 
 ##creating out model with torch
@@ -14,7 +14,7 @@ class TransformerLanguageModel(nn.Module):
         self.config=config
         self.tokenizer=tokenizer
         vocab_size = tokenizer.vocab_size
-        self.tok_embedding_table = nn.Embedding(vocab_size, config.n_embd) ## embedding 
+        self.tok_embedding_table = nn.Embedding(vocab_size, config.n_embd) ## embedding
         self.input_position_table = nn.Embedding(config.block_size, config.n_embd) ##input positional encoding
 
         # The output embedding layer
