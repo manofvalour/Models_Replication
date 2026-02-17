@@ -4,11 +4,11 @@ import torch
 ## assigning the parameters to variables
 @dataclass
 class TransformerConfig():
-    batch_size:int = 16      # number of independent sequence to process in parallel
-    max_iter:int = 20      #100k #total number of epoches
-    block_size: int = 1024     #the maximum context length of the prediction
-    train_logging_interval: int = 300
-    eval_interval: int =700
+    batch_size:int = 8      # number of independent sequence to process in parallel
+    max_iter:int = 10      #100k #total number of epoches
+    block_size: int = 512     #the maximum context length of the prediction
+    train_logging_interval: int = 50
+    eval_interval: int =200
     eval_iter:int = 100
     n_embd: int= 512     #512     # Dimensions of the model (dmodel)
     n_head:int = 8     #8       # number of head in the multihead attention mechanism

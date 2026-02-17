@@ -7,7 +7,6 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-
 def clean_wmt_row(row, tokenizer, block_size=32)-> dict[dict[str, list[int] | int | bool]]:
 
     """Helper function to clean and tokenize a single row of the WMT dataset."""
@@ -32,25 +31,32 @@ def clean_wmt_row(row, tokenizer, block_size=32)-> dict[dict[str, list[int] | in
         return {'src_ids': [], 'tgt_ids': [], 'src_len': 0, 'tgt_len': 0, 'keep': False}
 
 
-class WMTBatchSampler:
-    def __init__(self, dataset, max_tokens_per_batch=128, shuffle=True):
+import random
+
+class DistributedWMTBatchSampler(torch.utils.data.Sampler):
+    def __init__(self, sampler, dataset, max_tokens_per_batch=2048):
+        self.sampler = sampler 
+        self.dataset = dataset
         self.max_tokens = max_tokens_per_batch
-        self.shuffle = shuffle
+        self.item_lens = np.maximum(
+            np.array(dataset['src_len']), 
+            np.array(dataset['tgt_len'])
+        )
 
-        self.src_lens = np.array(dataset['src_len'])
-        self.tgt_lens = np.array(dataset['tgt_len'])
-        self.item_lens = np.maximum(self.src_lens, self.tgt_lens)
+    def __iter__(self):
+        indices = []
+        for idx in self.sampler:
+            if isinstance(idx, dict):
+                raise TypeError(f"Sampler yielded a dict instead of an int. Value: {idx}")
+            indices.append(int(idx))
+        
+        indices.sort(key=lambda i: self.item_lens[i])
 
-        # Initial sort by length
-        self.indices = np.argsort(self.item_lens)
-        self._batches = self._build_batches()
-
-    def _build_batches(self):
         batches = []
         current_batch = []
         max_len = 0
 
-        for idx in self.indices:
+        for idx in indices:
             item_len = self.item_lens[idx]
             temp_max_len = max(max_len, item_len)
 
@@ -64,17 +70,13 @@ class WMTBatchSampler:
 
         if current_batch:
             batches.append(current_batch)
-        return batches
 
-    def __iter__(self):
-        if self.shuffle:
-            random.shuffle(self._batches)
-        for batch in self._batches:
+        random.shuffle(batches)
+        for batch in batches:
             yield batch
 
     def __len__(self):
-        return len(self._batches)
-
+        return len(self.sampler) // (self.max_tokens // 40)
 
 def collate_fn(batch):
     # batch is now a list of dictionaries from the Dataset
@@ -114,32 +116,50 @@ def calculate_bleu(model, dataloader, tokenizer, device, max_new_tokens=128):
     return bleu.score
 
 
-def estimate_loss(model, dataloader, eval_iters=20, device='cpu'):
-    """ Helper to get a stable loss estimate without running the whole dataset
-     on the validation set.
-     """
-
+def estimate_loss(model, dataloader, eval_iters=20, device='cuda'):
+    """
+    Computes a stable average loss over a fixed number of batches.
+    Works across multiple GPUs in DDP.
+    """
     model.eval()
-    losses = torch.zeros(eval_iters)
-
-    # Use a temporary iterator to grab a few batches
-    data_iter = iter(dataloader)
+    
+    # We use a local tensor to track sums so we can synchronize later
+    total_loss = torch.tensor(0.0, device=device)
+    count = torch.tensor(0.0, device=device)
+    
+    # Create a fresh iterator
+    #data_iter = iter(dataloader)
 
     with torch.no_grad():
-        for k in range(eval_iters):
+        for _ in range(eval_iters):
             try:
-                X, Y = next(data_iter)
-            except StopIteration: # If we hit the end, restart
-                data_iter = iter(dataloader)
-                X, Y = next(data_iter)
+                # Grab next batch
+                src, tgt = next(iter(dataloader))
+            except StopIteration:
+                # Restart if validation set is smaller than eval_iters
+              #  data_iter = iter(dataloader)
+                src, tgt = next(dataloader)
 
-            X, Y = X.to(device), Y.to(device)
-            tgt_input, tgt_label = Y[:,:-1], Y[:,1:]
-            logits, loss = model(X, tgt_input, tgt_label)
-            losses[k] = loss.item()
+            src, tgt = src.to(device), tgt.to(device)
+            # Alignment for translation (Shifted right for teacher forcing)
+            tgt_input, tgt_label = tgt[:, :-1], tgt[:, 1:]
+
+            # Use autocast to match your training precision (prevents dtype errors)
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                _, loss = model(src, tgt_input, tgt_label)
+            
+            total_loss += loss
+            count += 1
+
+    # Calculate average on this GPU
+    avg_loss = total_loss / count
+
+    if torch.distributed.is_initialized():
+        torch.distributed.all_reduce(avg_loss, op=torch.distributed.ReduceOp.SUM)
+        avg_loss = avg_loss / torch.distributed.get_world_size()
 
     model.train()
-    return losses.mean()
+    return avg_loss
 
 
 def get_transformer_schedule(optimizer, d_model, warmup_steps=4000):
@@ -208,20 +228,23 @@ def data_prep(dataset, tokenizer, block_size=128, max_tokens_per_batch=2048, num
 
     val_data = val_d.map(clean_wmt_row, fn_kwargs={"block_size":block_size, 'tokenizer': tokenizer})
     filtered_vlds = val_data.filter(lambda x: x['keep'])
+    print(filtered_vlds)
+
+    val_indices = list(range(len(filtered_vlds)))
+        ## distributed sampler
+    tr_dist_sampler = DistributedSampler(filtered_tds, shuffle=True,)
+    val_dist_sampler = DistributedSampler(filtered_vlds, shuffle= False)
 
     # Batching the Dataset
-    tr_sampler = WMTBatchSampler(filtered_tds, max_tokens_per_batch=max_tokens_per_batch)
-    val_sampler = WMTBatchSampler(filtered_vlds, max_tokens_per_batch=max_tokens_per_batch)
+    tr_sampler = DistributedWMTBatchSampler(tr_dist_sampler, filtered_tds, max_tokens_per_batch=max_tokens_per_batch)
+    val_sampler = DistributedWMTBatchSampler(val_dist_sampler, filtered_vlds, max_tokens_per_batch=max_tokens_per_batch)
 
-    ## distributed sampler
-    #tr_dist_sampler = DistributedSampler(filtered_tds, shuffle=True)
-    #val_dist_sampler = DistributedSampler(filtered_vlds, shuffle=False)
     #Load to DataLoader
-    train_loader = DataLoader(filtered_tds, #batch_size = max_tokens_per_batch,
+    train_loader = DataLoader(filtered_tds,
                               batch_sampler=tr_sampler, collate_fn=collate_fn,
-                              num_workers=num_workers)
+                              num_workers=num_workers, pin_memory = True)
 
-    val_loader = DataLoader(filtered_vlds, batch_sampler=val_sampler,
-                            collate_fn=collate_fn, num_workers=num_workers//2)
+    val_loader = DataLoader(filtered_vlds, batch_sampler=val_sampler, 
+                            collate_fn=collate_fn, num_workers=num_workers//2, pin_memory=True)
 
-    return train_loader, val_loader
+    return train_loader, val_loader, tr_dist_sampler

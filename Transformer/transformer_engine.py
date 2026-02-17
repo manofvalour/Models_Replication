@@ -2,108 +2,83 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model_arch import Block
-
+from model_architecture import Block
 
 ##creating out model with torch
-class TransformerLanguageModel(nn.Module):
-    def __init__(self, config, tokenizer):
+class Transformer(nn.Module):
+    def __init__(self, config, vocab_size, pad_token_id):
         super().__init__()
+        self.config = config
+        self.pad_token_id = pad_token_id
 
-        # The input embedding layer
-        self.config=config
-        self.tokenizer=tokenizer
-        vocab_size = tokenizer.vocab_size
-        self.tok_embedding_table = nn.Embedding(vocab_size, config.n_embd) ## embedding
-        self.input_position_table = nn.Embedding(config.block_size, config.n_embd) ##input positional encoding
+        self.tok_emb = nn.Embedding(vocab_size, config.n_embd)
+        self.pos_emb = nn.Embedding(config.block_size, config.n_embd)
+        
+        self.encoder = nn.ModuleList([Block(config, is_decoder=False) for _ in range(config.n_layer)])
+        self.decoder = nn.ModuleList([Block(config, is_decoder=True) for _ in range(config.n_layer)])
+        
+        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, vocab_size, bias=False)
+        
+        # Weight Tying
+        self.tok_emb.weight = self.lm_head.weight
+        self.apply(self._init_weights)
 
-        # The output embedding layer
-        self.output_position_table = nn.Embedding(config.block_size, config.n_embd) ## output positional encoding
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None: torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-        # The encoder and decoder blocks
-        self.encoder_blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
-        self.decoder_blocks = nn.ModuleList([Block(config, is_decoder=True) for _ in range(config.n_layer)])
+    def forward(self, src, tgt_input, targets=None):
+        device = src.device
+        
+        # Encoder
+        s_pos = torch.arange(src.size(1), device=device)
+        x = self.tok_emb(src) + self.pos_emb(s_pos)
+        for block in self.encoder: 
+            x = block(x)
 
-        # The Linear model
-        self.lm_head = nn.Linear(config.n_embd, vocab_size)
-        self.lm_head.weight = self.tok_embedding_table.weight     #tying the weight
+        enc_out = x
 
-    def forward(self, idx_input, idx_output, target=None):
-        Bx,Tx = idx_input.shape
-        By, Ty = idx_output.shape
+        # Decoder
+        t_pos = torch.arange(tgt_input.size(1), device=device)
+        y = self.tok_emb(tgt_input) + self.pos_emb(t_pos)
+        for block in self.decoder: 
+            y = block(y, enc_out=enc_out)
+        
+        logits = self.lm_head(self.ln_f(y))
 
-        input_token_embd = self.tok_embedding_table(idx_input) #(B,T,C)
-        input_pos_embd = self.input_position_table(torch.arange(Tx, device =self.config.device)) #(T,C)
-
-        output_token_embd = self.tok_embedding_table(idx_output)
-        output_pos_embd = self.output_position_table(torch.arange(Ty, device=self.config.device))
-
-        x = input_token_embd + input_pos_embd #(B,T,C)
-        enc_out = self.encoder_blocks(x)              # encoder block output
-
-        y = output_token_embd + output_pos_embd #(B,T,C)
-        for decoder in self.decoder_blocks:
-            y = decoder(x=y, enc_out=enc_out)   # decoder block output
-
-        ## applying the linear model
-        logits= self.lm_head(y) ## (B,T, Vocab_size)
-
-        if target == None:
-            loss = None
-
-        else:
-            B,T,C = logits.shape
-            logits = logits.reshape(B*T, C)
-            target = target.reshape(B*T)
-            loss = F.cross_entropy(logits, target, label_smoothing=0.1, ignore_index=self.tokenizer.pad_token_id)
-
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(
+                logits.flatten(0, 1),#-1, logits.size(-1)), 
+                targets.flatten(0), 
+                ignore_index=self.pad_token_id,
+                label_smoothing=0.1
+            )
         return logits, loss
 
     @torch.no_grad()
-    def generate(self, src, max_new_tokens, sos_token_id=1, eos_token_id=2):
-        """
-        src: [Batch, Src_Seq_Len] (The English sentence)
-        max_new_tokens: How many French words to generate
-        """
+    def generate(self, src, max_len=50, sos_id=1, eos_id=2):
+        self.eval()
         device = src.device
-        B,T = src.shape
+        # Encode src once
+        s_pos = torch.arange(src.size(1), device=device)
+        enc_out = self.tok_emb(src) + self.pos_emb(s_pos)
+        for block in self.encoder: enc_out = block(enc_out)
 
-        #Encode the source
-        input_token_embd = self.tok_embedding_table(src)
-        input_pos_embd = self.input_position_table(torch.arange(T, device=device))
-        x = input_token_embd + input_pos_embd
-        enc_output = self.encoder_blocks(x)
-
-        # 2. Initialize the decoder input with the [SOS] token
-        idx = torch.full((B, 1), sos_token_id, dtype=torch.long, device=device)
-
-        for _ in range(max_new_tokens):
-            # Only take the last 'block_size' tokens if the sequence gets too long
+        idx = torch.full((src.size(0), 1), sos_id, dtype=torch.long, device=device)
+        for _ in range(max_len):
             idx_cond = idx[:, -self.config.block_size:]
+            t_pos = torch.arange(idx_cond.size(1), device=device)
+            y = self.tok_emb(idx_cond) + self.pos_emb(t_pos)
+            for block in self.decoder: y = block(y, enc_out=enc_out)
+            
+            logits = self.lm_head(self.ln_f(y[:, -1, :]))
+            next_id = torch.argmax(logits, dim=-1, keepdim=True)
+            idx = torch.cat((idx, next_id), dim=1)
+            if (next_id == eos_id).all(): break
+        return idx
 
-            # Get embeddings for current decoder input
-            output_token_embd = self.tok_embedding_table(idx_cond)
-            output_pos_embd = self.output_position_table(torch.arange(idx_cond.shape[1], device=device))
-            y = output_token_embd + output_pos_embd
-
-            # Pass through decoder blocks
-            decoder_input = y
-            for decoder_block in self.decoder_blocks:
-                decoder_input = decoder_block(x=decoder_input, enc_out=enc_output)
-            decoder_output= decoder_input
-
-            # Apply linear head to get logits
-            logits = self.lm_head(decoder_output)
-
-            logits = logits[:, -1, :] # [Batch, Vocab_Size] Focus on the last time step
-
-            idx_next = torch.argmax(logits, dim=-1, keepdim=True) # [Batch, 1]
-            idx = torch.cat((idx, idx_next), dim=1) #Append to the sequence
-
-            if (idx_next == eos_token_id).all():
-                break
-
-        # Decode the generated dataset
-        gen_words = self.tokenizer.batch_decode(idx, skip_special_tokens=True) #input tokens
-
-        return gen_words
