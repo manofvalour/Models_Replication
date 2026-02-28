@@ -3,3 +3,5 @@ datasets
 transformers
 sacrebleu
 numpy
+ipykernel
+

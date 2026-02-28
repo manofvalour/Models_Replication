@@ -1,19 +1,17 @@
+import os
 import torch
-from torch.utils.data import DataLoader
+import wandb
+import time
+import sacrebleu
+from tqdm import tqdm
 from transformers import BertTokenizer
 from datasets import load_dataset
-from tqdm import tqdm
-import os
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
-import wandb
 from contextlib import nullcontext
-import time
-from torch.utils.data import DataLoader, DistributedSampler
-from transformer_engine import Transformer
-from sacrebleu
 
+from transformer_engine import Transformer
 from utils import (calculate_bleu, get_transformer_schedule,
                    save_checkpoint, estimate_loss, data_prep,
                    get_transformer_schedule, load_checkpoint)
@@ -46,20 +44,21 @@ class Trainer:
               start_epoch=0):
 
         ddp = int(os.environ.get('LOCAL_RANK', -1)) != -1
-        best_model_val_loss = float('inf') # Initialize best validation loss for this epoch
+        best_model_val_loss = float('inf')
         val_loss = torch.tensor(float('inf'), device=self.device)
+        running_loss = torch.zeros(1, device = self.device)
         os.environ["TORCH_CUDAGRAPHS_EAGER_FALLBACK"] = "1"
         torch._dynamo.config.optimize_ddp = True
         torch.set_float32_matmul_precision('high')
     
         if ddp:
             assert torch.cuda.is_available(), "Distributed training requires CUDA"
-            #init_process_group(backend='nccl')
             ddp_rank = int(os.environ['RANK'])
             ddp_local_rank = int(os.environ['LOCAL_RANK'])
             world_size = int(os.environ['WORLD_SIZE'])
+            
             master_process = ddp_rank == 0
-            print(f"Initialized distributed training on rank {ddp_rank} (local rank {ddp_local_rank}) with world size {world_size}")
+            print(f"Initialized distributed training on rank {ddp_rank}; (local rank : {ddp_local_rank}) with world size {world_size}")
 
         else:
             ddp_rank = 0
@@ -91,9 +90,6 @@ class Trainer:
             model.train()
             dist_sampler.set_epoch(epoch)
             pbar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch}")
-            
-            running_loss = torch.zeros(1, device = self.device)
-            #t0 = time.time()
 
             for batch_idx, (src, tgt) in pbar:
                 t0 = time.time()
@@ -127,7 +123,7 @@ class Trainer:
                         avg_loss = running_loss / self.config.train_logging_interval
                         avg_ppl = torch.exp(avg_loss).item()
                         torch.cuda.synchronize() # Ensure all GPU computations are done before timing
-                        dt = (time.time() - t0) * accum_steps
+                        dt = (time.time() - t0)
                         toks_per_sec = (src.numel() * accum_steps* world_size) / dt
 
                         if master_process:
@@ -143,10 +139,10 @@ class Trainer:
                                 'ppl': f"{avg_ppl:.2f}",
                                 'norm': f"{norm:.2f}",
                                 'tps': f"{toks_per_sec:.0f}",
-                                'dt': f"{dt:.0f}secs",
+                                'dt': f"{dt*accum_steps:.0f}secs",
                                 'lr': f"{self.scheduler.get_last_lr()[0]:.2e}",
                             })
-                        running_loss.zero_() # Reset after logging
+                        #running_loss.zero_() # Reset after logging
 
                     # Validation Logic (Less frequent to save time)
                     if global_step % self.config.eval_interval == 0:
@@ -162,8 +158,7 @@ class Trainer:
                             tqdm.write(f"Step {global_step} | Val Loss: {val_loss.item():.4f} | val_ppl: {val_perp:.2f}")
                         
                         
-                    ## generating response and calculating bleu score every 1000 steps
-            #if ddp_local_rank == 0 and global_step % 20 == 0: #self.config.eval_interval == 0:
+            # generating response and calculating bleu score every 1000 steps
             model.eval()
             with torch.no_grad():
                 # Generate translations for a batch of validation examples
@@ -181,7 +176,6 @@ class Trainer:
                 print(f"Reference: {reference_texts[0]}")
 
                 # Calculate BLEU score
-                #bleu_score = calculate_bleu(self.tokenizer, generated_texts, reference_texts)
                 bleu_score = sacrebleu.corpus_bleu(generated_texts, [reference_texts])
                 tqdm.write(f"Step {global_step} | BLEU Score: {bleu_score.score:.2f}")
             model.train() # Switch back to training
