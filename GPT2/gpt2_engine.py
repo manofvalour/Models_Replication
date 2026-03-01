@@ -34,6 +34,8 @@ class CausalAttnBlock(nn.Module):
         y = y.transpose(1,2).contiguous().view(B,T,C)
         y = self.out_proj(y)
 
+        F.scaled_dot_product_attention
+
         return y
 
 
@@ -67,14 +69,14 @@ class GPTBlock(nn.Module):
 
         return x
 
-class GPT2(nn.module):
-    def __init__(self, config):
+class GPT2(nn.Module):
+    def __init__(self, config:GPT2Config):
         super().__init__()
         self.config = config
         
         self.transformer = nn.ModuleDict(
             tok_embd = nn.Embedding(config.vocab_size, config.n_embd),
-            pos_embd = nn.Embedding(config.seq_len, config.n_embd),
+            pos_embd = nn.Embedding(config.batch_size, config.n_embd),
             gpt_block = nn.ModuleList([GPTBlock(config) for _ in range(config.n_layers)]),
             ln = nn.LayerNorm(config.n_embd)
         )
@@ -94,15 +96,22 @@ class GPT2(nn.module):
 
     def forward(self, x, y=None):
         assert len(x.shape)>=3, "shape should be B,T,C"
-        B,T,C = x.shape
+        B,T = x.shape
+        assert T<= self.config.batch_size
+        pos = torch.arange(0,T, dtype=torch.long, device=x.device)
 
-        embd_x = self.tok_embd(x) + self.pos_embd(x)
-        y_pred = self.gpt_block(embd_x, y)
+        embd_x = self.tok_embd(x) + self.pos_embd(pos)
+        for block in self.transformer.gpt_block:
+            y_pred = block(embd_x)
 
         logit = self.lm(self.ln(y_pred))
         loss = None
 
         if y != None:
-            logit, loss = self.lm(self.ln(y_pred))
+            loss = F.cross_entropy(
+                logit.flatten(0,1),
+                y.flatten(0),
+                label_smoothing=0.1
+            ) 
 
         return logit, loss
