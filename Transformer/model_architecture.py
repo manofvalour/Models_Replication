@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 
 #===================================THE TRANSFORMER MODEL ARCHITECTURE ====================================
@@ -9,15 +10,17 @@ class MultiHeadAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         self.n_head = config.n_head
+        self.n_embd = config.n_embd
         self.head_size = config.n_embd // config.n_head
         self.is_causal = is_causal
 
         # Efficient single-matrix projections
-        self.q_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
-        self.k_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
-        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.attn_w = nn.Linear(config.n_embd, 3*config.n_embd, bias=False)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
         self.dropout = config.dropout
+
+        torch.register_buffer('bias', torch.tril(torch.ones(config.block_size,config.block_size)).view(
+            1,1, config.block_size, config.block_size))
 
     def forward(self, x, kv_input=None):
         B, T, C = x.shape
@@ -25,16 +28,26 @@ class MultiHeadAttention(nn.Module):
         Tk = kv_input.size(1)
 
         # Reshape to (B, nh, T, hs)
-        q = self.q_proj(x).view(B, T, self.n_head, self.head_size).transpose(1, 2)
-        k = self.k_proj(kv_input).view(B, Tk, self.n_head, self.head_size).transpose(1, 2)
-        v = self.v_proj(kv_input).view(B, Tk, self.n_head, self.head_size).transpose(1, 2)
+        #qkv = self.attn_w(c)
+        q_w,k_w,v_w = self.attn_w.split(self.n_embd, dim=-2)
+        q = q_w(x).view(B, T, self.n_head, self.head_size).transpose(1, 2)
+        k = k_w(kv_input).view(B, Tk, self.n_head, self.head_size).transpose(1, 2)
+        v = v_w(kv_input).view(B, Tk, self.n_head, self.head_size).transpose(1, 2)
 
+        ## self_attn
+
+        attn = (q@k.transpose(-2,-1))*(1/math.sqrt(k.size(-1)))
+        if self.is_causal:
+            attn = attn.masked_fill(self.bias[:,:,:T,:T]==0, float('-inf'))
+        attn = F.softmax(attn, dim = -1)
+        y = attn@v
+        
         # Handles scaling
-        y = F.scaled_dot_product_attention(
-            q, k, v, 
-            dropout_p=self.dropout if self.training else 0.0, 
-            is_causal=self.is_causal and kv_input is x
-        )
+        #y = F.scaled_dot_product_attention(
+         #   q, k, v, 
+          #  dropout_p=self.dropout if self.training else 0.0, 
+           # is_causal=self.is_causal and kv_input is x
+        #)
 
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.c_proj(y)
