@@ -13,6 +13,7 @@ class CausalAttnBlock(nn.Module):
 
         self.c_attn = nn.Linear(config.n_embd, config.n_embd*3)
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.c_proj_NANO_GPT_SCALE_INIT = 1
         self.n_embd = config.n_embd
         self.n_head = config.n_head
 
@@ -28,11 +29,11 @@ class CausalAttnBlock(nn.Module):
         k = k.view(B,T, self.n_head, C//self.n_head).transpose(1,2)
         v = v.view(B,T, self.n_head, C//self.n_head).transpose(1,2)
 
-        attn = (q@k.transpose(-2,-1))*(1/math.sqrt(k.size(-1)))
-        attn = attn.masked_fill(self.bias[:,:,:T,:T]==0, float('-inf'))
-        attn = F.softmax(attn, dim = -1)
-        y = attn@v
-        #y = F.scaled_dot_product_attention(q,k,v, is_causal=True)
+        #attn = (q@k.transpose(-2,-1))*(1/math.sqrt(k.size(-1)))
+        #attn = attn.masked_fill(self.bias[:,:,:T,:T]==0, float('-inf'))
+        #attn = F.softmax(attn, dim = -1)
+        #y = attn@v
+        y = F.scaled_dot_product_attention(q,k,v, is_causal=True)
         y = y.transpose(1,2).contiguous().view(B,T,C)
 
         y = self.c_proj(y)
@@ -48,6 +49,7 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd)
         self.gelu = nn.GELU(approximate='tanh')
+        self.c_proj_NANO_GPT_SCALE_INIT = 1
 
     def forward(self, x):
         y = self.c_proj(self.gelu(self.c_fc(x)))
@@ -84,10 +86,14 @@ class GPT2(nn.Module):
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias= False)
 
         ## weight tieing
-        self.lm_head.weight = self.transformer.wte.weight
+        self.transformer.wte.weight =self.lm_head.weight
         self.apply(self._weight_init)
 
+    ## Weight initialization
     def _weight_init(self, module):
+        std = 0.02
+        if hasattr(module, 'NANO_GPT_SCALE_INIT'):
+            std*= (2 *self.config.n_layers) ** -0.5
         if isinstance(module, nn.Linear):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None: 
@@ -110,10 +116,14 @@ class GPT2(nn.Module):
 
         if y != None:
             loss = F.cross_entropy(
-                logit.flatten(0,1),
-                y.flatten(0),
-                label_smoothing=0.1
-            ) 
+                logit.view(-1, logit.size(-1)),
+                           y.view(-1)
+                           )
+            #loss = F.cross_entropy(
+             #   logit.flatten(0,1),
+              #  y.flatten(0),
+               # label_smoothing=0.1
+           # ) 
 
         return logit, loss
     

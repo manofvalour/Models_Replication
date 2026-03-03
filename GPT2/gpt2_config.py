@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 @dataclass
 class GPT2Config():
-    vocab_size:int
+    vocab_size:int = 50257
     batch_size: int=5
     #drop_out:float
     n_layers:int = 12
