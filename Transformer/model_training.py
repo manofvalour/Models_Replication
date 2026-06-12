@@ -4,6 +4,7 @@ import wandb
 import time
 import sacrebleu
 from tqdm import tqdm
+from transformers import T5Tokenizer
 from transformers import BertTokenizer
 from datasets import load_dataset
 import torch.distributed as dist
@@ -93,6 +94,7 @@ class Trainer:
         #pbar = tqdm(enumerate(train_loader), total=self.config.max_iter))
         train_iter = iter(train_loader)
         running_loss = torch.zeros(1, device = self.device)
+        train_accum_count = 0
 
         for iteration in range(start_iter, self.config.max_iter):
         #for batch_idx, (src, tgt) in pbar:
@@ -114,8 +116,9 @@ class Trainer:
 
             loss = loss/accum_steps
             running_loss += loss.detach()
+            #print(running_loss)
 
-            context = model.no_sync() if ddp and (iteration + 1) % accum_steps != 0 else nullcontext()
+            context = model.no_sync() if ddp and (global_step + 1) % accum_steps != 0 else nullcontext()
             with context:
                 if dtype == torch.bfloat16:
                     loss.backward()
@@ -124,6 +127,7 @@ class Trainer:
                     scaler.unscale_(self.optimizer)
 
             if (global_step+1) % accum_steps == 0:
+
                 if ddp:
                     dist.all_reduce(running_loss, op=dist.ReduceOp.AVG)
                 norm = torch.nn.utils.clip_grad_norm_(model.parameters(), self.config.max_grad_norm)
@@ -137,11 +141,12 @@ class Trainer:
                     scaler.update()
 
                 self.optimizer.zero_grad(set_to_none =True)
+                train_accum_count+=1
 
                 # Logging every 500 steps
-                if (global_step+1) % (self.config.train_logging_interval) == 0:
+                if global_step !=0 and (global_step+1) % (self.config.train_logging_interval) == 0:
                     
-                    avg_loss = running_loss / self.config.train_logging_interval
+                    avg_loss = running_loss / train_accum_count
                     avg_ppl = torch.exp(avg_loss).item()
                     torch.cuda.synchronize() # Ensure all GPU computations are done before timing
                     dt = (time.time() - t0)
@@ -156,7 +161,9 @@ class Trainer:
                             "train/grad_norm": norm,
 
                         }, step=global_step)
-                        tqdm.write(f"step: {iteration} | train_loss: {avg_loss.item():.2f} | ppl: {avg_ppl:.2f} | norm: {norm:.2f} | tps: {toks_per_sec:.0f} | dt: {dt*accum_steps:.0f}secs | lr: {self.scheduler.get_last_lr()[0]:.2e}")
+                        train_accum_count=0
+
+                        tqdm.write(f"step: {iteration+1} | train_loss: {avg_loss.item():.2f} | ppl: {avg_ppl:.2f} | norm: {norm:.2f} | tps: {toks_per_sec:.0f} | dt: {dt*accum_steps:.0f}secs | lr: {self.scheduler.get_last_lr()[0]:.2e}")
                         
                     #running_loss.zero_() # Reset after logging
 
@@ -241,7 +248,9 @@ def main():
 
     ## loading the dataset and tokenizer
     dataset = load_dataset("sjsurbhi/english-to-french-translation")#)#)                #loaded dataset from HuggingFace "sethjsa/wmt_en_fr_parallel")#
-    tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased', use_fast=True)   #loaded tokenizer from Huggingface
+    # Option 1: Use T5 tokenizer (better for translation)
+    tokenizer = T5Tokenizer.from_pretrained('t5-base')
+    #tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased', use_fast=True)   #loaded tokenizer from Huggingface
     config = TransformerConfig()
 
     wandb.init(
@@ -263,7 +272,7 @@ def main():
     resume_path = "checkpoints/latest.pt"
 
 
-    model = Transformer(config, vocab_size=tokenizer.vocab_size, pad_token_id=0)
+    model = Transformer(config, vocab_size=tokenizer.vocab_size, pad_token_id=tokenizer.pad_token_id)
     tot_params = sum(p.numel() for p in model.parameters())  
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) 
 
