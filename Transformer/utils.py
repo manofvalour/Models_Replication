@@ -146,7 +146,7 @@ def estimate_loss(model, dataloader, eval_iters=20, device='cuda'):
 
             # Use autocast to match your training precision (prevents dtype errors)
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                _, loss = model(src, tgt_input, tgt_label)
+                loss = model(src, tgt_input, tgt_label)
             
             total_loss += loss
             count += 1
@@ -169,7 +169,8 @@ def get_transformer_schedule(optimizer, d_model, warmup_steps=4000):
 
     def lr_lambda(step):
         # step + 1 to avoid division by zero at step 0
-        step = step + 1
+        if step == 0:
+            step =1
 
         term1 = step ** -0.5
         term2 = step * (warmup_steps ** -1.5)
@@ -185,6 +186,11 @@ def save_checkpoint(model, optimizer,
                     val_loss,epoch, path):
     """Saves the model and optimizer state to a checkpoint file."""
 
+    raw_model = model.module if hasattr(model, 'module') else model
+    # if torch.compile wrapped it further, unwrap _orig_mod
+    if hasattr(raw_model, '_orig_mod'):
+        raw_model = raw_model._orig_mod
+
 
     checkpoint = {
         'epoch': epoch,
@@ -193,22 +199,28 @@ def save_checkpoint(model, optimizer,
         'scheduler': scheduler.state_dict(),
         'train_loss': train_loss,
         'val_loss': val_loss.item(),
-        'rng_state': torch.get_rng_state(),
     }
 
+    if torch.cuda.is_available():
+        checkpoint['cuda_rng_state'] = torch.cuda.get_rng_state()
+
     torch.save(checkpoint, path)
-    print(f"Checkpoint saved at epoch {epoch} to {path}")
+   # print(f"Checkpoint saved at epoch {epoch} to {path}")
 
 
 def load_checkpoint(model, optimizer, scheduler, path, device):
     """Loads the model and optimizer state from a checkpoint file."""
 
-    checkpoint = torch.load(path, map_location=device)
+    checkpoint = torch.load(path, map_location="cpu")
 
     model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device)
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     scheduler.load_state_dict(checkpoint['scheduler'])
-    torch.set_rng_state(checkpoint['rng_state'])
+
+   # torch.set_rng_state(checkpoint['rng_state'])
+    if torch.cuda.is_available() and 'cuda_rng_state' in checkpoint:
+        torch.cuda.set_rng_state(checkpoint['cuda_rng_state'].cpu())
 
     print(f"Checkpoint loaded from {path} at epoch {checkpoint['epoch']}")
 

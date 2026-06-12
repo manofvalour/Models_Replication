@@ -20,9 +20,8 @@ class Transformer(nn.Module):
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.lm_head = nn.Linear(config.n_embd, vocab_size, bias=False)
         
-        # Weight Tying
-        self.tok_emb.weight = self.lm_head.weight
-        self.apply(self._init_weights)
+        self.apply(self._init_weights) #init weight
+        self.lm_head.weight = self.tok_emb.weight #weight tying
 
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
@@ -53,13 +52,17 @@ class Transformer(nn.Module):
         loss = None
         if targets is not None:
             loss = F.cross_entropy(
-                logits.flatten(0, 1),#-1, logits.size(-1)), 
+                logits.flatten(0, 1), 
                 targets.flatten(0), 
                 ignore_index=self.pad_token_id,
                 label_smoothing=0.1
             )
-        return logits, loss
 
+            return loss
+        else:
+            # For inference/generate, return logits
+            return logits
+            
     @torch.no_grad()
     def generate(self, src, max_len=50, sos_id=1, eos_id=2):
         self.eval()
@@ -81,4 +84,3 @@ class Transformer(nn.Module):
             idx = torch.cat((idx, next_id), dim=1)
             if (next_id == eos_id).all(): break
         return idx
-

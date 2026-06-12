@@ -4,3 +4,6 @@ transformers
 sacrebleu
 numpy
 ipykernel
+triton
+tqdm
+wandb
