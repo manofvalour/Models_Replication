@@ -46,7 +46,7 @@ class MultiHeadAttention(nn.Module):
             is_causal=self.is_causal
         )
 
-        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = y.transpose(1, 2).contiguous().reshape(B, T, C)
         return self.c_proj(y)
 
 
@@ -67,7 +67,7 @@ class Block(nn.Module):
         )
 
         if is_decoder:
-            self.cross_attn = MultiHeadAttention(config, is_causal=False)
+            self.cross_attn = MultiHeadAttention(config, is_causal=False, is_cross=True)
             self.ln3 = nn.LayerNorm(config.n_embd)
 
     def forward(self, x, enc_out=None):

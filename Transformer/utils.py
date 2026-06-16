@@ -116,50 +116,31 @@ def calculate_bleu(model, dataloader, tokenizer, device, max_new_tokens=128):
     return bleu.score
 
 
-def estimate_loss(model, dataloader, eval_iters=20, device='cuda'):
-    """
-    Computes a stable average loss over a fixed number of batches.
-    Works across multiple GPUs in DDP.
-    """
+def estimate_loss(model, dataloader, eval_iters, device):
     model.eval()
-    
-    # We use a local tensor to track sums so we can synchronize later
-    total_loss = torch.tensor(0.0, device=device)
-    count = torch.tensor(0.0, device=device)
-    
-    # Create a fresh iterator
-    #data_iter = iter(dataloader)
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    total_loss = torch.zeros(1, device=device)
+    count = 0
 
+    data_iter = iter(dataloader)
     with torch.no_grad():
         for _ in range(eval_iters):
             try:
-                # Grab next batch
-                src, tgt = next(iter(dataloader))
+                src, tgt = next(data_iter)
             except StopIteration:
-                # Restart if validation set is smaller than eval_iters
-              #  data_iter = iter(dataloader)
-                src, tgt = next(dataloader)
+                data_iter = iter(dataloader)
+                src, tgt = next(data_iter)
 
             src, tgt = src.to(device), tgt.to(device)
-            # Alignment for translation (Shifted right for teacher forcing)
             tgt_input, tgt_label = tgt[:, :-1], tgt[:, 1:]
 
-            # Use autocast to match your training precision (prevents dtype errors)
-            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            with torch.autocast(device_type='cuda', dtype=dtype):
                 loss = model(src, tgt_input, tgt_label)
-            
-            total_loss += loss
+
+            total_loss += loss.detach()
             count += 1
 
-    # Calculate average on this GPU
-    avg_loss = total_loss / count
-
-    if torch.distributed.is_initialized():
-        torch.distributed.all_reduce(avg_loss, op=torch.distributed.ReduceOp.SUM)
-        avg_loss = avg_loss / torch.distributed.get_world_size()
-
-    model.train()
-    return avg_loss
+    return total_loss / count
 
 
 def get_transformer_schedule(optimizer, d_model, warmup_steps=4000):
@@ -183,7 +164,8 @@ def get_transformer_schedule(optimizer, d_model, warmup_steps=4000):
 
 def save_checkpoint(model, optimizer,
                     scheduler, train_loss,
-                    val_loss,epoch, path):
+                    val_loss,epoch, 
+                    wandb_run_id, path):
     """Saves the model and optimizer state to a checkpoint file."""
 
     raw_model = model.module if hasattr(model, 'module') else model
@@ -199,6 +181,7 @@ def save_checkpoint(model, optimizer,
         'scheduler': scheduler.state_dict(),
         'train_loss': train_loss,
         'val_loss': val_loss.item(),
+        'run_id': wandb_run_id
     }
 
     if torch.cuda.is_available():
@@ -226,7 +209,7 @@ def load_checkpoint(model, optimizer, scheduler, path, device):
 
     return (model, optimizer, scheduler,
             checkpoint['epoch'], checkpoint['train_loss'],
-            checkpoint['val_loss'])
+            checkpoint['val_loss'], checkpoint['run_id'])
 
 
 def data_prep(dataset, tokenizer, block_size=128, max_tokens_per_batch=2048, num_workers=4):
@@ -254,9 +237,13 @@ def data_prep(dataset, tokenizer, block_size=128, max_tokens_per_batch=2048, num
     #Load to DataLoader
     train_loader = DataLoader(filtered_tds,
                               batch_sampler=tr_sampler, collate_fn=collate_fn,
-                              num_workers=num_workers, pin_memory = True)
+                              num_workers=num_workers, pin_memory=True,
+                             persistent_workers=True,
+                             prefetch_factor=2)
 
     val_loader = DataLoader(filtered_vlds, batch_sampler=val_sampler, 
-                            collate_fn=collate_fn, num_workers=num_workers//2, pin_memory=True)
+                            collate_fn=collate_fn, num_workers=num_workers//2, 
+                            pin_memory=True,persistent_workers=True,
+                           prefetch_factor=2)
 
     return train_loader, val_loader, tr_dist_sampler
