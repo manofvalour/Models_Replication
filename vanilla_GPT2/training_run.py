@@ -59,23 +59,24 @@ def train_gpt(config:GPT2Config, data, device):
       loss= loss/grad_accum_step
       loss_accum += loss.detach()
 
-      scaler.scale(loss).backward()
-      scaler.unscale_(optimizer)
+     # scaler.scale(loss).backward()
+      loss.backward()
+     # scaler.unscale_(optimizer)
 
     norm=torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0) #gradient clipping
     lr = get_lr(step, config)
     for param_group in optimizer.param_groups:
       param_group['lr']= lr
     
-    #optimizer.step()
-    scaler.step(optimizer)
-    scaler.update()
+    optimizer.step()
+    #scaler.step(optimizer)
+    #scaler.update()
     #torch.cuda.synchronize()
 
     t1 = time.time()
     train_perp = math.exp(loss_accum)
     dt = (t1-t0)*1000 #ms
-    toks_per_sec = (config.BATCH_SIZE * config.SEQ_LEN)/(t1-t0)
+    toks_per_sec = (config.BATCH_SIZE * config.SEQ_LEN * grad_accum_step)/(t1-t0)
 
     if (step+1)%config.TRAIN_STEP==0:
       print(f"step: {step+1} | train_loss: {loss_accum:.2f} | train_perp: {train_perp:.2f} | norm: {norm:.4f} | lr: {lr:.4f} | dt: {dt:.2f}ms | toks/sec: {toks_per_sec:.0f}")

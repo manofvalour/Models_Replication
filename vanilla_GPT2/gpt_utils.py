@@ -93,8 +93,8 @@ class DataLoaderLite:
         tokens = self.encoder.encode(text)
         data = torch.tensor((tokens), dtype=torch.long)
         if n==0.0:
-            print(f"Loaded {len(self.tokens)}tokens training data and {len(self.val_data)}tokens val data")
-            print(f"Epoch = {len(self.tokens//(self.B*self.T))} batches")
+            print(f"Loaded {len(data)}tokens")
+            print(f"Epoch = {len(data//(self.B*self.T))} batches")
 
             return data
 
@@ -117,8 +117,60 @@ class DataLoaderLite:
 
         self.current_position+= B*T
 
-        if self.current_position + ((B*T)+1) > len(self.tokens):
+        if self.current_position + ((B*T)+1) > len(data):
             self.current_position=0
+
+        return x,y
+    
+    def decode(self, idx):
+        return self.encoder.decode(idx)
+    
+#setting up data distribution
+class DistributedDataLoader:
+    def __init__(self, batch_size,seq_len, 
+                process_rank, num_of_process):
+        import tiktoken
+        self.B = batch_size
+        self.T = seq_len
+        self.process_rank = process_rank
+        self.num_of_process = num_of_process
+
+        ## initializing the encoder
+        self.encoder = tiktoken.get_encoding('gpt2')     #init the tokenizer
+        self.current_position = self.B * self.T * self.process_rank
+
+    def encode_and_split(self, text, n:int):
+        tokens = self.encoder.encode(text)                    #encoding the data to tokens
+        data = torch.tensor((tokens), dtype=torch.long)       #converting to torch tensor
+        
+        if n==0.0:
+            print(f"Loaded {len(self.tokens)}tokens  and {len(self.data)}tokens")
+            print(f"Epoch = {len(self.tokens//(self.B*self.T))} batches")
+
+            return data
+
+        else:
+            size = int(n * len(data))
+            train_data, val_data = data[:size], data[size:]
+    
+            print(f"Loaded {len(train_data)}tokens training data and {len(val_data)}tokens val data")
+            print(f"Epoch: {len(train_data//(self.B*self.T))} batches")
+
+            return train_data, val_data
+
+    def next_batch(self, data):
+        B,T = self.B, self.T
+        num_of_process = self.num_of_process
+        process_rank = self.process_rank
+
+        buf = data[self.current_position: self.current_position+(B*T)+1]
+        x = buf[:-1].view(B,T)
+        y = buf[1:].view(B,T)
+
+        self.current_position+= B*T*num_of_process
+
+        if self.current_position + ((B*T*num_of_process)+1) > len(data):
+         self.current_position=B*T*process_rank
 
         return x,y
     

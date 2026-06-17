@@ -48,9 +48,11 @@ class MOEGPT(nn.Module):
         for block in self.transformer.blocks:
             block.attn.reset_cache()
 
-    def forward(self, index, target = None, 
+    def forward(self, index, 
+                target = None, 
                 use_cache=False, 
                 cache_pos=0):
+        
         B,T = index.size()
         assert T<= self.config.SEQ_LEN, "Input sequence length exceed maximum sequence length"
 

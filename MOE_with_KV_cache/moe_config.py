@@ -18,7 +18,7 @@ class MOEConfig():
     MAX_NEW_TOKENS=100
     TRAIN_STEP=10
     EVAL_STEP=100
-    GEN_STEP=500
+    GEN_STEP=50
     TOT_BATCH_SIZE= 1024
     NUM_EXPERT = 4
     TOP_K =2

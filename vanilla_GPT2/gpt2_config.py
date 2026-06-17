@@ -20,6 +20,4 @@ class GPT2Config():
     EVAL_STEP=100
     GEN_EVAL=500
     TOT_BATCH_SIZE= 1024
-    NUM_EXPERT = 4
-    TOP_K =2
     device = 'cuda' if torch.cuda.is_available() else 'cpu'

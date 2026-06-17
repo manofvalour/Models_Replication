@@ -21,7 +21,6 @@ from utils import (calculate_bleu, get_transformer_schedule,
 from config import TransformerConfig
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
-from pydantic import PydanticDeprecatedSince20
 warnings.filterwarnings("ignore", message=".*has no effect in the context.*")
 
 class Trainer:
