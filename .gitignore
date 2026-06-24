@@ -50,6 +50,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/
+trained_models/
+data/
 
 # Translations
 *.mo

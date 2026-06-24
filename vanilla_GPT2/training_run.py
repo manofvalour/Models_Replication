@@ -44,6 +44,8 @@ def train_gpt(config:GPT2Config, data, device):
   optimizer = model.configure_optimizers(weight_decay = 0.1, 
                                          learning_rate = 6e-4, 
                                          device = device)
+ # train_data = train_data.to(device)
+
   for step in range(config.MAX_STEPS):
     t0 = time.time()
     optimizer.zero_grad()
@@ -118,7 +120,7 @@ def train_gpt(config:GPT2Config, data, device):
 
 
 def main():
-  data = load_text("GPT2/wizard_of_oz.txt")
+  data = load_text("data/wizard_of_oz.txt")
   config= GPT2Config()
   train_gpt(config, data, device)
 
